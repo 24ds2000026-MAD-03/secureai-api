@@ -1,86 +1,33 @@
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import re
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 import time
+import json
 
 app = FastAPI()
 
-# Enable CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["POST", "OPTIONS"],
-    allow_headers=["*"],
-)
+@app.post("/stream")
+async def stream_feedback(request: Request):
+    data = await request.json()
+    prompt = data.get("prompt", "")
+    stream_flag = data.get("stream", False)
+    
+    if not stream_flag:
+        return {"error": "stream must be true"}
 
-class ValidationRequest(BaseModel):
-    userId: str
-    input: str
-    category: str
+    def event_generator():
+        # Simulate streaming 6 chunks of feedback insights
+        chunks = [
+            "Insight 1: Customers desire faster delivery times.\n",
+            "Insight 2: Users report confusion navigating the interface.\n",
+            "Insight 3: Pricing structure is unclear and needs simplification.\n",
+            "Insight 4: Mobile application occasionally crashes on login.\n",
+            "Insight 5: Positive feedback about customer support responsiveness.\n",
+            "Insight 6: Many users request dark mode and accessibility improvements.\n"
+        ]
+        for chunk in chunks:
+            payload = json.dumps({"choices": [{"delta": {"content": chunk}}]})
+            yield f"data: {payload}\n\n"
+            time.sleep(0.3)  # simulate streaming delay
+        yield "data: [DONE]\n\n"
 
-# Simple in-memory rate limit store
-rate_limit_store = {}
-
-RATE_LIMIT = 10  # requests per minute
-
-
-def check_rate_limit(user_id):
-    current_time = time.time()
-    user_data = rate_limit_store.get(user_id, [])
-
-    # Keep only last 60 seconds
-    user_data = [t for t in user_data if current_time - t < 60]
-
-    if len(user_data) >= RATE_LIMIT:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
-
-    user_data.append(current_time)
-    rate_limit_store[user_id] = user_data
-
-
-def detect_prompt_injection(text):
-    patterns = [
-        r"ignore all safety rules",
-        r"developer mode",
-        r"system prompt",
-        r"reveal.*prompt",
-        r"you are now",
-        r"act as system",
-        r"override.*instructions",
-    ]
-
-    for pattern in patterns:
-        if re.search(pattern, text, re.IGNORECASE):
-            return True, f"Blocked due to detected pattern: {pattern}"
-
-    return False, "Input passed all security checks"
-
-
-@app.post("/validate")
-async def validate(request: ValidationRequest):
-    try:
-        check_rate_limit(request.userId)
-
-        blocked, reason = detect_prompt_injection(request.input)
-
-        if blocked:
-            return {
-                "blocked": True,
-                "reason": "Potential prompt injection detected",
-                "sanitizedOutput": None,
-                "confidence": 0.98
-            }
-
-        return {
-            "blocked": False,
-            "reason": reason,
-            "sanitizedOutput": request.input,
-            "confidence": 0.95
-        }
-
-    except HTTPException as e:
-        raise e
-
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid request")
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
